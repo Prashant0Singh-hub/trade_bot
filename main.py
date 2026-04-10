@@ -4,17 +4,16 @@ import pytz
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from signal_parser import parse_signal, is_valid_signal
+from signal_parser import parse_signal, is_valid_signal, format_signal_summary
 
 # ============================================
-# CONFIGURATION — set these in Railway Variables
+# CONFIGURATION
 # ============================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 AUTH_TOKEN     = os.environ.get("AUTH_TOKEN", "")
 ALGO_ID        = os.environ.get("ALGO_ID", "28925086")
 
 def is_market_open():
-    """Returns True if NSE market is open (Mon-Fri, 9:15 AM - 3:30 PM IST)"""
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
     if now.weekday() >= 5:
@@ -24,29 +23,53 @@ def is_market_open():
     return open_time <= now <= close_time
 
 def send_to_tradetron(signal):
-    """Send parsed signal to Tradetron API"""
     if not is_market_open():
-        print("⏰ Market is closed. Signal skipped.")
+        print("⏰ Market closed. Signal skipped.")
         return
 
     url = "https://api.tradetron.tech/api"
 
-    # Handle EXIT signals
-    if signal.get('action') == 'EXIT':
+    # EXIT ALL
+    if signal.get('action') == 'EXIT_ALL':
         payload = {
             "auth-token": AUTH_TOKEN,
-            "key":   "side",   "value":  "EXIT",
-            "key1":  "symbol", "value1": signal.get("symbol", ""),
+            "key": "action", "value": "EXIT_ALL"
         }
-        print(f"🚪 Sending EXIT signal for {signal.get('symbol')}")
+
+    # EXIT single position
+    elif signal.get('action') == 'EXIT':
+        payload = {
+            "auth-token": AUTH_TOKEN,
+            "key":  "action",      "value":  "EXIT",
+            "key1": "symbol",      "value1": signal.get("symbol", ""),
+            "key2": "strike",      "value2": str(signal.get("strike", "")),
+            "key3": "option_type", "value3": signal.get("option_type", ""),
+        }
+
+    # ENTRY — Options
+    elif "strike" in signal or "strike_type" in signal:
+        payload = {
+            "auth-token": AUTH_TOKEN,
+            "key":  "side",        "value":  signal.get("side", ""),
+            "key1": "symbol",      "value1": signal.get("symbol", ""),
+            "key2": "strike",      "value2": str(signal.get("strike", signal.get("strike_type", "ATM"))),
+            "key3": "atm_offset",  "value3": str(signal.get("atm_offset", 0)),
+            "key4": "option_type", "value4": signal.get("option_type", ""),
+            "key5": "expiry",      "value5": signal.get("expiry", ""),
+            "key6": "quantity",    "value6": str(signal.get("quantity", 50)),
+            "key7": "sl",          "value7": str(signal.get("stop_loss", 0)),
+            "key8": "target",      "value8": str(signal.get("target", 0)),
+        }
+
+    # ENTRY — Cash stocks
     else:
         payload = {
             "auth-token": AUTH_TOKEN,
-            "key":   "side",     "value":  signal.get("side", ""),
-            "key1":  "symbol",   "value1": signal.get("symbol", ""),
-            "key2":  "quantity", "value2": str(signal.get("quantity", 1)),
-            "key3":  "sl",       "value3": str(signal.get("stop_loss", 0)),
-            "key4":  "target",   "value4": str(signal.get("target", 0)),
+            "key":  "side",     "value":  signal.get("side", ""),
+            "key1": "symbol",   "value1": signal.get("symbol", ""),
+            "key2": "quantity", "value2": str(signal.get("quantity", 1)),
+            "key3": "sl",       "value3": str(signal.get("stop_loss", 0)),
+            "key4": "target",   "value4": str(signal.get("target", 0)),
         }
 
     try:
@@ -60,10 +83,8 @@ def send_to_tradetron(signal):
         print(f"❌ Unexpected error: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming Telegram messages"""
     if not update.message and not update.channel_post:
         return
-
     message = update.message or update.channel_post
     if not message or not message.text:
         return
@@ -74,23 +95,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         signal = parse_signal(text)
 
-        if signal.get('action') == 'EXIT' and 'symbol' in signal:
-            print(f"🚪 Exit signal detected: {signal}")
-            send_to_tradetron(signal)
+        if is_valid_signal(signal):
+            summary = format_signal_summary(signal)
+            print(f"✅ Valid signal: {summary}")
+            print(f"   Raw: {signal}")
 
-        elif is_valid_signal(signal):
-            print(f"✅ Valid entry signal: {signal}")
-
-            # Warn if optional fields are missing
             if 'stop_loss' not in signal:
-                print("⚠️  Warning: No stop loss detected in message")
+                print("⚠️  No stop loss detected")
             if 'target' not in signal:
-                print("⚠️  Warning: No target detected in message")
-            if 'quantity' not in signal:
-                print("⚠️  Warning: No quantity detected — defaulting to 1")
+                print("⚠️  No target detected")
+            if 'quantity' not in signal and signal.get('action') not in ['EXIT_ALL']:
+                print("⚠️  No quantity detected — using default")
 
             send_to_tradetron(signal)
-
         else:
             print("⚠️  Ignored — not a valid trade signal")
 
