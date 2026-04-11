@@ -133,6 +133,9 @@ def parse_signal(message):
     tgt = re.search(r'\b(?:T1|TGT|TARGET)[:\s]?(\d+\.?\d*)', msg_upper)
     if tgt:
         signal['target'] = float(tgt.group(1))
+    t2 = re.search(r'\bT2[:\s]?(\d+\.?\d*)', msg_upper)
+    if t2:
+        signal['target2'] = float(t2.group(1))
 
     # ─────────────────────────────────────
     # Quantity / Lots
