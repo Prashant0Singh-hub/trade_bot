@@ -69,7 +69,15 @@ def parse_signal(message):
     # ─────────────────────────────────────
     # Underlying symbol (NIFTY, BANKNIFTY etc.)
     # ─────────────────────────────────────
-    symbol = re.search(r'\b(BANKNIFTY|NIFTY|FINNIFTY|SENSEX|MIDCPNIFTY)\b', msg_upper)
+    # Detect underlying symbol
+    symbol = re.search(
+        r'\b(BANKNIFTY|NIFTY|FINNIFTY|SENSEX|MIDCPNIFTY|'
+        r'RELIANCE|TATAMOTORS|HDFCBANK|INFY|TCS|WIPRO|'
+        r'SBIN|ICICIBANK|AXISBANK|KOTAKBANK|BAJFINANCE|'
+        r'ADANIENT|HINDUNILVR|ITC|LT|MARUTI|ONGC|NTPC|'
+        r'POWERGRID|SUNPHARMA|TITAN|ULTRACEMCO|ASIANPAINT)\b',
+        msg_upper
+    )
     if symbol:
         signal['symbol'] = symbol.group(1)
 
@@ -162,8 +170,7 @@ def is_valid_signal(signal):
     """
     A signal is valid if it has:
     - A side (BUY/SELL) or action (EXIT)
-    - A symbol (NIFTY etc.)
-    - An option type (CE/PE) or ATM strike type
+    - A symbol
     """
     if signal.get('action') in ['EXIT_ALL']:
         return True
@@ -171,8 +178,7 @@ def is_valid_signal(signal):
         return True
     has_side = 'side' in signal
     has_symbol = 'symbol' in signal
-    has_option = 'option_type' in signal
-    return has_side and has_symbol and has_option
+    return has_side and has_symbol
 
 
 def format_signal_summary(signal):
