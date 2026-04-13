@@ -1,269 +1,192 @@
 import re
 
-"""
-============================================
-UNIVERSAL NIFTY OPTIONS SIGNAL PARSER
-============================================
-Supports ALL of these formats:
-
-Type 1 - Simple:
-  BUY NIFTY 24000 CE QTY:50
-  SELL NIFTY 23500 PE QTY:50
-
-Type 2 - With Expiry:
-  BUY NIFTY 24000 CE 17APR2026 QTY:50
-
-Type 3 - With SL and Target:
-  BUY NIFTY 24000 CE SL:50 T1:150 QTY:50
-
-Type 4 - Full Detail:
-  BUY NIFTY 24000 CE 17APR2026 SL:50 T1:150 QTY:2LOT
-
-Type 5 - Short Indian Format:
-  NIFTY 24000CE BUY SL50 TGT150
-
-Type 6 - ATM Format:
-  BUY NIFTY ATM CE QTY:50
-  BUY NIFTY ATM+100 CE QTY:50
-  BUY NIFTY ATM-100 PE QTY:50
-
-Type 7 - Exit:
-  EXIT NIFTY 24000 CE
-  CLOSE ALL
-  EXIT ALL
-============================================
-"""
-
 def parse_signal(message):
+    """
+    ============================================
+    SUPPORTED FORMATS:
+    ============================================
+    BUY NIFTY 24000 CE SL:50 T1:150 T2:250 QTY:50
+    SELL NIFTY 23700 PE 47 SL:55 T1:30 T2:25 QTY:5
+    BUY SENSEX 76600 CE GOOD ABOVE 660 SL:597 T1:700 T2:750 QTY:4
+    BUY NIFTY 23750 CE GOOD ABOVE 55 SL:36 T1:67 T2:85 QTY:1
+    BUY NIFTY ATM CE SL:50 T1:150 QTY:50
+    BUY NIFTY ATM+100 CE SL:50 T1:150 QTY:50
+    EXIT NIFTY 24000 CE
+    EXIT ALL / CLOSE ALL
+    BUY RELIANCE SL:2400 T1:2500 T2:2600 QTY:10
+    ============================================
+    """
+
     signal = {}
-    message = message.strip()
-    msg_upper = message.upper()
+    msg_upper = message.strip().upper()
 
-    # ─────────────────────────────────────
-    # EXIT / CLOSE detection
-    # ─────────────────────────────────────
-    if re.search(r'\b(EXIT|CLOSE)\s+ALL\b', msg_upper):
-        return {'action': 'EXIT_ALL'}
+    # ── EXIT ALL ──────────────────────────────────────────────
+    if re.search(r'\b(EXIT ALL|CLOSE ALL|SQUARE OFF ALL)\b', msg_upper):
+        signal['action'] = 'EXIT_ALL'
+        return signal
 
+    # ── EXIT single position ──────────────────────────────────
     exit_match = re.search(r'\b(EXIT|CLOSE)\b', msg_upper)
     if exit_match:
         signal['action'] = 'EXIT'
-        # Try to extract what to exit
-        symbol_after = re.search(r'\b(?:EXIT|CLOSE)\s+(NIFTY|BANKNIFTY|SENSEX|FINNIFTY)', msg_upper)
-        if symbol_after:
-            signal['symbol'] = symbol_after.group(1)
-        strike_exit = re.search(r'(\d{4,6})\s*(CE|PE)', msg_upper)
-        if strike_exit:
-            signal['strike'] = int(strike_exit.group(1))
-            signal['option_type'] = strike_exit.group(2)
+        exit_symbol = re.search(
+            r'\b(?:EXIT|CLOSE)\s+(BANKNIFTY|NIFTY|FINNIFTY|SENSEX|MIDCPNIFTY|[A-Z]{2,20})',
+            msg_upper
+        )
+        if exit_symbol:
+            signal['symbol'] = exit_symbol.group(1)
+        # Detect strike for exit (e.g. EXIT NIFTY 24000 CE)
+        strike_match = re.search(r'\b(\d{4,6})\b', msg_upper)
+        if strike_match:
+            signal['strike'] = int(strike_match.group(1))
+        opt_type = re.search(r'\b(CE|PE|CALL|PUT)\b', msg_upper)
+        if opt_type:
+            signal['option_type'] = 'CE' if opt_type.group(1) in ('CE', 'CALL') else 'PE'
         return signal
 
-    # ─────────────────────────────────────
-    # BUY / SELL detection
-    # ─────────────────────────────────────
+    # ── BUY / SELL side ───────────────────────────────────────
     side = re.search(r'\b(BUY|SELL)\b', msg_upper)
     if side:
         signal['side'] = side.group(1)
-        signal['action'] = 'ENTRY'
 
-    # ─────────────────────────────────────
-    # Underlying symbol (NIFTY, BANKNIFTY etc.)
-    # ─────────────────────────────────────
-    # Detect underlying symbol
+    # ── Underlying symbol ─────────────────────────────────────
     symbol = re.search(
         r'\b(BANKNIFTY|NIFTY|FINNIFTY|SENSEX|MIDCPNIFTY|'
-        r'RELIANCE|TATAMOTORS|HDFCBANK|INFY|TCS|WIPRO|'
-        r'SBIN|ICICIBANK|AXISBANK|KOTAKBANK|BAJFINANCE|'
-        r'ADANIENT|HINDUNILVR|ITC|LT|MARUTI|ONGC|NTPC|'
-        r'POWERGRID|SUNPHARMA|TITAN|ULTRACEMCO|ASIANPAINT)\b',
+        r'RELIANCE|TATAMOTORS|HDFCBANK|INFY|TCS|WIPRO|SBIN|'
+        r'ICICIBANK|AXISBANK|KOTAKBANK|BAJFINANCE|ADANIENT|'
+        r'HINDUNILVR|ITC|LT|MARUTI|ONGC|NTPC|POWERGRID|'
+        r'SUNPHARMA|TITAN|ULTRACEMCO|ASIANPAINT)\b',
         msg_upper
     )
     if symbol:
         signal['symbol'] = symbol.group(1)
 
-    # ─────────────────────────────────────
-    # ATM format detection (Type 6)
-    # BUY NIFTY ATM CE, BUY NIFTY ATM+100 CE, BUY NIFTY ATM-100 PE
-    # ─────────────────────────────────────
-    atm_match = re.search(r'\bATM\s*([+-]\s*\d+)?\b', msg_upper)
-    if atm_match:
+    # ── Option type CE / PE ───────────────────────────────────
+    opt_type = re.search(r'\b(CE|PE|CALL|PUT)\b', msg_upper)
+    if opt_type:
+        signal['option_type'] = 'CE' if opt_type.group(1) in ('CE', 'CALL') else 'PE'
+
+    # ── Strike price ──────────────────────────────────────────
+    # ATM offset format: ATM+100, ATM-100
+    atm_offset = re.search(r'\bATM([+-]\d+)?\b', msg_upper)
+    if atm_offset:
         signal['strike_type'] = 'ATM'
-        offset_str = atm_match.group(1)
-        if offset_str:
-            signal['atm_offset'] = int(offset_str.replace(' ', ''))
-        else:
-            signal['atm_offset'] = 0
-
-    # ─────────────────────────────────────
-    # Strike price (24000, 23500 etc.)
-    # Handles both "24000 CE" and "24000CE"
-    # ─────────────────────────────────────
-    if 'strike_type' not in signal:
-        strike = re.search(r'\b(\d{4,6})\s*(CE|PE)\b', msg_upper)
-        if strike:
-            signal['strike'] = int(strike.group(1))
-            signal['option_type'] = strike.group(2)
-        else:
-            # Handles "24000CE" without space
-            strike2 = re.search(r'(\d{4,6})(CE|PE)', msg_upper)
-            if strike2:
-                signal['strike'] = int(strike2.group(1))
-                signal['option_type'] = strike2.group(2)
+        offset = atm_offset.group(1)
+        signal['atm_offset'] = int(offset) if offset else 0
     else:
-        # ATM format - get CE/PE
-        opt_type = re.search(r'\b(CE|PE)\b', msg_upper)
-        if opt_type:
-            signal['option_type'] = opt_type.group(1)
+        # Numeric strike: must be 4-6 digits and look like a real strike
+        # We look for it AFTER the symbol name and BEFORE/AFTER CE/PE
+        # Strategy: find all 4-6 digit numbers and pick the first one
+        # that is NOT the SL, T1, T2, QTY value
+        # We extract strike early, before removing keywords
+        strike_candidates = re.findall(r'\b(\d{4,6})\b', msg_upper)
+        if strike_candidates:
+            signal['strike'] = int(strike_candidates[0])
 
-    # ─────────────────────────────────────
-    # Expiry date detection
-    # Handles: 17APR2026, 17-APR-2026, 17/04/2026
-    # ─────────────────────────────────────
-    expiry = re.search(
-        r'\b(\d{1,2}[\-/]?(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\-/]?\d{2,4})\b',
-        msg_upper
-    )
-    if expiry:
-        signal['expiry'] = expiry.group(1)
+    # ── Remove noise phrases before parsing numbers ───────────
+    # "GOOD ABOVE 660" → the 660 is an entry price hint, not SL/T1
+    # We tag it as entry_price and remove to avoid confusion
+    good_above = re.search(r'GOOD\s+ABOVE\s+(\d+\.?\d*)', msg_upper)
+    if good_above:
+        signal['entry_price'] = float(good_above.group(1))
+        # Remove this phrase so numbers don't get mis-parsed
+        msg_upper = re.sub(r'GOOD\s+ABOVE\s+\d+\.?\d*', '', msg_upper)
 
-    # ─────────────────────────────────────
-    # Stop Loss
-    # Handles: SL:50, SL 50, SL50
-    # ─────────────────────────────────────
+    # ── Stop Loss ─────────────────────────────────────────────
     sl = re.search(r'\bSL[:\s]?(\d+\.?\d*)', msg_upper)
     if sl:
         signal['stop_loss'] = float(sl.group(1))
 
-    # ─────────────────────────────────────
-    # Target
-    # Handles: T1:150, TGT:150, TARGET:150, TGT150
-    # ─────────────────────────────────────
-    tgt = re.search(r'\b(?:T1|TGT|TARGET)[:\s]?(\d+\.?\d*)', msg_upper)
-    if tgt:
-        signal['target'] = float(tgt.group(1))
+    # ── Target 1 ─────────────────────────────────────────────
+    t1 = re.search(r'\b(?:T1|TGT|TARGET)[:\s]?(\d+\.?\d*)', msg_upper)
+    if t1:
+        signal['target'] = float(t1.group(1))
+
+    # ── Target 2 ─────────────────────────────────────────────
     t2 = re.search(r'\bT2[:\s]?(\d+\.?\d*)', msg_upper)
     if t2:
         signal['target2'] = float(t2.group(1))
 
-    # ─────────────────────────────────────
-    # Quantity / Lots
-    # Handles: QTY:50, QTY50, 2LOT, LOT:2, LOTS:2
-    # ─────────────────────────────────────
-    qty = re.search(r'\b(?:QTY|QUANTITY)[:\s]?(\d+)', msg_upper)
+    # ── Quantity ──────────────────────────────────────────────
+    qty = re.search(r'\b(?:QTY|LOT|LOTS|QT)[:\s]?(\d+)', msg_upper)
     if qty:
         signal['quantity'] = int(qty.group(1))
-    else:
-        lot = re.search(r'(\d+)\s*LOT[S]?', msg_upper)
-        if lot:
-            signal['lots'] = int(lot.group(1))
-            signal['quantity'] = int(lot.group(1)) * 50  # 1 NIFTY lot = 50
-        else:
-            lot2 = re.search(r'\bLOT[S]?[:\s]?(\d+)', msg_upper)
-            if lot2:
-                signal['lots'] = int(lot2.group(1))
-                signal['quantity'] = int(lot2.group(1)) * 50
+
+    # ── Default action ────────────────────────────────────────
+    signal['action'] = 'ENTRY'
 
     return signal
 
 
 def is_valid_signal(signal):
-    """
-    A signal is valid if it has:
-    - A side (BUY/SELL) or action (EXIT)
-    - A symbol
-    """
-    if signal.get('action') in ['EXIT_ALL']:
+    """Signal is valid if it has minimum required fields."""
+    if signal.get('action') == 'EXIT_ALL':
         return True
     if signal.get('action') == 'EXIT' and 'symbol' in signal:
         return True
-    has_side = 'side' in signal
-    has_symbol = 'symbol' in signal
-    return has_side and has_symbol
+    return 'side' in signal and 'symbol' in signal
 
 
 def format_signal_summary(signal):
-    """Returns a human readable summary of the parsed signal"""
-    if signal.get('action') == 'EXIT_ALL':
+    """Human-readable summary of parsed signal."""
+    action = signal.get('action', 'ENTRY')
+
+    if action == 'EXIT_ALL':
         return "EXIT ALL positions"
 
-    if signal.get('action') == 'EXIT':
-        strike_info = f" {signal.get('strike', '')}{signal.get('option_type', '')}" if 'strike' in signal else ""
-        return f"EXIT {signal.get('symbol', '')}{strike_info}"
+    if action == 'EXIT':
+        return (
+            f"EXIT {signal.get('symbol','')} "
+            f"{signal.get('strike','')} "
+            f"{signal.get('option_type','')}"
+        ).strip()
 
-    side = signal.get('side', '?')
-    symbol = signal.get('symbol', '?')
+    parts = [
+        signal.get('side', ''),
+        signal.get('symbol', ''),
+        str(signal.get('strike', signal.get('strike_type', ''))),
+        signal.get('option_type', ''),
+    ]
+    summary = ' '.join(p for p in parts if p)
 
-    if signal.get('strike_type') == 'ATM':
-        offset = signal.get('atm_offset', 0)
-        offset_str = f"+{offset}" if offset > 0 else str(offset) if offset < 0 else ""
-        strike_str = f"ATM{offset_str}"
-    else:
-        strike_str = f"{signal.get('strike', '?')}"
+    if 'entry_price' in signal:
+        summary += f" ABOVE {signal['entry_price']}"
+    if 'stop_loss' in signal:
+        summary += f" SL:{signal['stop_loss']}"
+    if 'target' in signal:
+        summary += f" T1:{signal['target']}"
+    if 'target2' in signal:
+        summary += f" T2:{signal['target2']}"
+    if 'quantity' in signal:
+        summary += f" QTY:{signal['quantity']}"
 
-    opt_type = signal.get('option_type', '?')
-    expiry = f" EXP:{signal.get('expiry')}" if 'expiry' in signal else ""
-    sl = f" SL:{signal.get('stop_loss')}" if 'stop_loss' in signal else ""
-    tgt = f" T1:{signal.get('target')}" if 'target' in signal else ""
-
-    if 'lots' in signal:
-        qty_str = f" {signal.get('lots')}LOT ({signal.get('quantity')} qty)"
-    elif 'quantity' in signal:
-        qty_str = f" QTY:{signal.get('quantity')}"
-    else:
-        qty_str = ""
-
-    return f"{side} {symbol} {strike_str} {opt_type}{expiry}{sl}{tgt}{qty_str}"
+    return summary
 
 
-# ─────────────────────────────────────
-# TEST ALL FORMATS
-# ─────────────────────────────────────
+# ── Self-test ─────────────────────────────────────────────────
 if __name__ == "__main__":
     test_messages = [
-        # Type 1 - Simple
-        "BUY NIFTY 24000 CE QTY:50",
-        "SELL NIFTY 23500 PE QTY:50",
-
-        # Type 2 - With Expiry
-        "BUY NIFTY 24000 CE 17APR2026 QTY:50",
-
-        # Type 3 - With SL and Target
-        "BUY NIFTY 24000 CE SL:50 T1:150 QTY:50",
-
-        # Type 4 - Full Detail
-        "BUY NIFTY 24000 CE 17APR2026 SL:50 T1:150 QTY:2LOT",
-
-        # Type 5 - Short Indian Format
-        "NIFTY 24000CE BUY SL50 TGT150",
-
-        # Type 6 - ATM Format
-        "BUY NIFTY ATM CE QTY:50",
-        "BUY NIFTY ATM+100 CE QTY:50",
-        "BUY NIFTY ATM-100 PE QTY:50",
-
-        # Type 7 - Exit
+        "BUY NIFTY 24000 CE SL:50 T1:150 T2:250 QTY:50",
+        "BUY SENSEX 76600 CE GOOD ABOVE 660 SL:597 T1:700 T2:750 QTY:4",
+        "BUY NIFTY 23750 CE GOOD ABOVE 55 SL:36 T1:67 T2:85 QTY:1",
+        "SELL NIFTY 23700 PE 47 SL:55 T1:30 T2:25 QTY:5",
+        "BUY NIFTY ATM CE SL:50 T1:150 QTY:50",
+        "BUY NIFTY ATM+100 CE SL:50 T1:150 QTY:50",
+        "BUY RELIANCE SL:2400 T1:2500 T2:2600 QTY:10",
         "EXIT NIFTY 24000 CE",
-        "CLOSE ALL",
         "EXIT ALL",
-
-        # BANKNIFTY
-        "BUY BANKNIFTY 52000 CE SL:100 T1:300 QTY:1LOT",
-
-        # Malformed - should be ignored
-        "Hey what's the market today?",
-        "NIFTY looking bullish today",
+        "CLOSE ALL",
+        "Hey what's the market like today?",
+        "SELL BANKNIFTY 52000 PE SL:200 T1:500 T2:800 QTY:1",
     ]
 
-    print("=" * 60)
-    print("UNIVERSAL PARSER TEST RESULTS")
-    print("=" * 60)
-
+    print(f"{'MESSAGE':<55} {'RESULT'}")
+    print("-" * 110)
     for msg in test_messages:
-        signal = parse_signal(msg)
-        valid = is_valid_signal(signal)
-        summary = format_signal_summary(signal) if valid else "IGNORED"
-        status = "✅" if valid else "⚠️ "
-        print(f"\n{status} Input:  {msg}")
-        print(f"   Output: {summary}")
+        result = parse_signal(msg)
+        valid = is_valid_signal(result)
+        summary = format_signal_summary(result) if valid else "❌ IGNORED"
+        print(f"{msg:<55} {summary}")
         if valid:
-            print(f"   Raw:    {signal}")
+            print(f"  → Raw: {result}")
+        print()
